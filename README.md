@@ -1,3 +1,9 @@
+# 目錄
+
+/public/index.html
+
+
+
 # WebRTC 音訊直播平台
 
 使用 WebRTC 技術構建的實時音訊直播平台，支持廣播者和聽眾角色。
