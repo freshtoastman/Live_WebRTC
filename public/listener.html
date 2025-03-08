@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>音訊直播 - 聽眾</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    .controls { margin: 20px 0; }
+    button { padding: 10px 20px; margin-right: 10px; }
+    .status { margin-top: 20px; }
+    audio { width: 100%; margin-top: 20px; }
+    .server-config { margin: 20px 0; padding: 15px; background: #f8f8f8; border-radius: 5px; }
+    .server-config h3 { margin-top: 0; }
+    .server-config input { width: 100%; padding: 8px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <h1>音訊直播 - 聽眾</h1>
+  
+  <div class="server-config">
+    <h3>伺服器設置</h3>
+    <input id="serverUrl" type="text" value="https://rtmp-server-example.glitch.me" placeholder="信令伺服器網址 (例如: https://your-server.glitch.me)">
+    <p><small>注意: 請確保與廣播者使用相同的伺服器</small></p>
+  </div>
+  
+  <div class="controls">
+    <input id="roomInput" type="text" placeholder="請輸入 5 位房間 ID (例如: A2B3C)" style="padding: 10px; width: 240px;">
+    <button id="joinButton">加入直播</button>
+    <button id="leaveButton" disabled>離開直播</button>
+  </div>
+  
+  <div class="status">
+    <p id="statusText">尚未加入直播</p>
+  </div>
+  
+  <audio id="audioPlayer" controls autoplay></audio>
+  
+  <!-- 使用 CDN 載入 Socket.IO 客戶端 -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const serverUrlInput = document.getElementById('serverUrl');
+    let socket;
+    let peerConnection;
+    let audioPlayer = document.getElementById('audioPlayer');
+    
+    const roomInput = document.getElementById('roomInput');
+    const joinButton = document.getElementById('joinButton');
+    const leaveButton = document.getElementById('leaveButton');
+    const statusText = document.getElementById('statusText');
+    
+    // ICE 伺服器配置
+    const iceServers = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+    
+    joinButton.addEventListener('click', joinBroadcast);
+    leaveButton.addEventListener('click', leaveBroadcast);
+    
+    function joinBroadcast() {
+      const serverUrl = serverUrlInput.value.trim();
+      if (!serverUrl) {
+        alert('請輸入信令伺服器網址');
+        return;
+      }
+      
+      const roomId = roomInput.value.trim();
+      if (!roomId) {
+        alert('請輸入房間 ID');
+        return;
+      }
+      
+      // 連接到信令伺服器
+      socket = io(serverUrl);
+      
+      socket.on('connect', () => {
+        statusText.textContent = '已連接到伺服器，正在加入直播...';
+        
+        // 加入指定的房間
+        socket.emit('join-room', roomId);
+        
+        joinButton.disabled = true;
+        leaveButton.disabled = false;
+      });
+      
+      socket.on('connect_error', (error) => {
+        console.error('伺服器連接錯誤:', error);
+        statusText.textContent = '伺服器連接失敗，請檢查網址是否正確';
+        leaveBroadcast();
+      });
+      
+      // 處理廣播者提議
+      socket.on('offer', async (data) => {
+        const broadcasterId = data.source;
+        
+        // 創建新的對等連接
+        peerConnection = new RTCPeerConnection(iceServers);
+        
+        // 設置遠程媒體處理
+        peerConnection.ontrack = (event) => {
+          audioPlayer.srcObject = event.streams[0];
+        };
+        
+        // 處理 ICE 候選
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit('ice-candidate', {
+              target: broadcasterId,
+              candidate: event.candidate
+            });
+          }
+        };
+        
+        // 處理連接狀態變化
+        peerConnection.onconnectionstatechange = () => {
+          if (peerConnection.connectionState === 'connected') {
+            statusText.textContent = '已連接到直播';
+          } else if (peerConnection.connectionState === 'disconnected' || 
+                     peerConnection.connectionState === 'failed') {
+            statusText.textContent = '直播連接中斷';
+            leaveBroadcast();
+          }
+        };
+        
+        // 設置提議並發送應答
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        
+        socket.emit('answer', {
+          target: broadcasterId,
+          answer: peerConnection.localDescription
+        });
+      });
+      
+      // 處理 ICE 候選
+      socket.on('ice-candidate', (data) => {
+        if (peerConnection) {
+          peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+        }
+      });
+      
+      // 處理廣播者離開
+      socket.on('broadcaster-left', () => {
+        statusText.textContent = '廣播者已離開';
+        leaveBroadcast();
+      });
+    }
+    
+    function leaveBroadcast() {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      
+      if (audioPlayer.srcObject) {
+        audioPlayer.srcObject.getTracks().forEach(track => track.stop());
+        audioPlayer.srcObject = null;
+      }
+      
+      if (socket) {
+        socket.disconnect();
+      }
+      
+      joinButton.disabled = false;
+      leaveButton.disabled = true;
+      statusText.textContent = '已離開直播';
+    }
+  </script>
+</body>
+</html> 

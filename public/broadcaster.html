@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>音訊直播 - 廣播者</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    .controls { margin: 20px 0; }
+    button { padding: 10px 20px; margin-right: 10px; }
+    .status { margin-top: 20px; }
+    .audio-source { margin: 20px 0; }
+    select { padding: 8px; min-width: 200px; }
+    .server-config { margin: 20px 0; padding: 15px; background: #f8f8f8; border-radius: 5px; }
+    .server-config h3 { margin-top: 0; }
+    .server-config input { width: 100%; padding: 8px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <h1>音訊直播 - 廣播者</h1>
+  
+  <div class="server-config">
+    <h3>伺服器設置</h3>
+    <input id="serverUrl" type="text" value="https://rtmp-server-example.glitch.me" placeholder="信令伺服器網址 (例如: https://your-server.glitch.me)">
+    <p><small>注意: 如果使用自己的信令伺服器，請確保已部署且正在運行</small></p>
+  </div>
+  
+  <div class="audio-source">
+    <h3>音訊來源選擇</h3>
+    <select id="audioSourceSelect">
+      <option value="microphone">麥克風</option>
+      <option value="system">系統音訊 (屏幕分享)</option>
+    </select>
+  </div>
+  
+  <div class="room-setup">
+    <h3>房間設置</h3>
+    <div>
+      <input id="customRoomId" type="text" placeholder="自訂房間 ID (留空則自動生成)" style="padding: 8px; width: 240px;">
+      <button id="refreshRoomId" style="padding: 8px;">重新生成</button>
+    </div>
+  </div>
+  
+  <div class="controls">
+    <button id="startButton">開始廣播</button>
+    <button id="stopButton" disabled>停止廣播</button>
+  </div>
+  
+  <div class="status">
+    <p id="statusText">尚未開始廣播</p>
+    <p id="listenerCount">聽眾數量: 0</p>
+    <p id="roomIdDisplay"></p>
+  </div>
+  
+  <!-- 添加本地預覽 -->
+  <div class="preview">
+    <h3>本地預覽</h3>
+    <audio id="localAudio" controls muted></audio>
+  </div>
+  
+  <!-- 使用 CDN 載入 Socket.IO 客戶端 -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const serverUrlInput = document.getElementById('serverUrl');
+    const audioSourceSelect = document.getElementById('audioSourceSelect');
+    const startButton = document.getElementById('startButton');
+    const stopButton = document.getElementById('stopButton');
+    const statusText = document.getElementById('statusText');
+    const listenerCountEl = document.getElementById('listenerCount');
+    const roomIdDisplay = document.getElementById('roomIdDisplay');
+    const localAudio = document.getElementById('localAudio');
+    const customRoomId = document.getElementById('customRoomId');
+    const refreshRoomId = document.getElementById('refreshRoomId');
+    
+    let socket;
+    let localStream;
+    let peerConnections = {};
+    let listenerCount = 0;
+    
+    // 生成簡短易記的房間 ID (4-6 位字母數字)
+    function generateRoomId(length = 5) {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 排除容易混淆的字符
+      let result = '';
+      for (let i = 0; i < length; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return result;
+    }
+    
+    let roomId = generateRoomId();
+    
+    // 更新房間 ID 顯示
+    function updateRoomIdDisplay() {
+      roomIdDisplay.textContent = `房間 ID: ${roomId}`;
+      customRoomId.value = '';
+    }
+    
+    // 初始顯示房間 ID
+    updateRoomIdDisplay();
+    
+    // 自訂房間 ID 處理
+    customRoomId.addEventListener('input', function() {
+      if (this.value.trim()) {
+        roomId = this.value.trim();
+        roomIdDisplay.textContent = `房間 ID: ${roomId} (自訂)`;
+      } else {
+        roomId = generateRoomId();
+        updateRoomIdDisplay();
+      }
+    });
+    
+    // 重新生成房間 ID
+    refreshRoomId.addEventListener('click', function() {
+      roomId = generateRoomId();
+      updateRoomIdDisplay();
+    });
+    
+    // ICE 伺服器配置
+    const iceServers = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+    
+    startButton.addEventListener('click', startBroadcast);
+    stopButton.addEventListener('click', stopBroadcast);
+    
+    async function startBroadcast() {
+      try {
+        // 連接到信令伺服器
+        const serverUrl = serverUrlInput.value.trim();
+        if (!serverUrl) {
+          alert('請輸入信令伺服器網址');
+          return;
+        }
+        
+        // 創建 Socket.IO 連接
+        socket = io(serverUrl);
+        
+        socket.on('connect', async () => {
+          statusText.textContent = '已連接到信令伺服器';
+          
+          // 開始獲取媒體並廣播
+          const audioSource = audioSourceSelect.value;
+          
+          if (audioSource === 'microphone') {
+            // 獲取麥克風音訊
+            localStream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+              video: false
+            });
+            statusText.textContent = `正在廣播麥克風 (房間 ID: ${roomId})`;
+          } else if (audioSource === 'system') {
+            // 獲取系統音訊 (通過屏幕分享)
+            localStream = await navigator.mediaDevices.getDisplayMedia({
+              video: true,
+              audio: true
+            });
+            
+            // 如果用戶沒有選擇分享音訊
+            if (!localStream.getAudioTracks().length) {
+              stopBroadcast();
+              alert('請選擇包含系統音訊的分享選項');
+              return;
+            }
+            
+            // 關閉視訊軌道，我們只需要音訊
+            localStream.getVideoTracks().forEach(track => track.stop());
+            localStream.removeTrack(localStream.getVideoTracks()[0]);
+            statusText.textContent = `正在廣播系統音訊 (房間 ID: ${roomId})`;
+          }
+          
+          // 設置本地預覽
+          localAudio.srcObject = localStream;
+          
+          // 註冊為廣播者
+          socket.emit('register-broadcaster', roomId);
+          
+          startButton.disabled = true;
+          stopButton.disabled = false;
+          
+          // 監聽新的聽眾加入
+          socket.on('new-listener', handleNewListener);
+          
+          // 監聽聽眾離開
+          socket.on('listener-left', (listenerId) => {
+            if (peerConnections[listenerId]) {
+              peerConnections[listenerId].close();
+              delete peerConnections[listenerId];
+              listenerCount--;
+              listenerCountEl.textContent = `聽眾數量: ${listenerCount}`;
+            }
+          });
+          
+          // 處理應答
+          socket.on('answer', (data) => {
+            const pc = peerConnections[data.source];
+            if (pc) {
+              pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            }
+          });
+          
+          // 處理 ICE 候選項
+          socket.on('ice-candidate', (data) => {
+            const pc = peerConnections[data.source];
+            if (pc) {
+              pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+          });
+        });
+        
+        socket.on('connect_error', (error) => {
+          console.error('伺服器連接錯誤:', error);
+          statusText.textContent = '伺服器連接失敗，請檢查網址是否正確';
+          stopBroadcast();
+        });
+        
+      } catch (error) {
+        console.error('獲取音訊來源失敗:', error);
+        statusText.textContent = '獲取音訊來源失敗。';
+      }
+    }
+    
+    function stopBroadcast() {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localAudio.srcObject = null;
+      }
+      
+      Object.values(peerConnections).forEach(pc => pc.close());
+      peerConnections = {};
+      
+      if (socket) {
+        socket.off('new-listener');
+        socket.off('listener-left');
+        socket.off('answer');
+        socket.off('ice-candidate');
+        socket.disconnect();
+      }
+      
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      statusText.textContent = '廣播已停止';
+      listenerCount = 0;
+      listenerCountEl.textContent = `聽眾數量: ${listenerCount}`;
+    }
+    
+    async function handleNewListener(listenerId) {
+      const peerConnection = new RTCPeerConnection(iceServers);
+      peerConnections[listenerId] = peerConnection;
+      
+      // 添加本地音訊流到連接
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+      
+      // 處理 ICE 候選
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('ice-candidate', {
+            target: listenerId,
+            candidate: event.candidate
+          });
+        }
+      };
+      
+      // 創建並發送提議
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      
+      socket.emit('offer', {
+        target: listenerId,
+        offer: peerConnection.localDescription
+      });
+      
+      listenerCount++;
+      listenerCountEl.textContent = `聽眾數量: ${listenerCount}`;
+    }
+  </script>
+</body>
+</html> 
