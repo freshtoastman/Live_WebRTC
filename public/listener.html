@@ -49,6 +49,29 @@
     const leaveButton = document.getElementById('leaveButton');
     const statusText = document.getElementById('statusText');
     
+    // 檢查 URL 參數並自動填充
+    function checkUrlParams() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomFromUrl = urlParams.get('room');
+      const serverFromUrl = urlParams.get('server');
+      
+      if (roomFromUrl) {
+        roomInput.value = roomFromUrl;
+      }
+      
+      if (serverFromUrl) {
+        serverUrlInput.value = serverFromUrl;
+      }
+      
+      // 如果兩個參數都存在，自動加入直播
+      if (roomFromUrl && serverFromUrl) {
+        joinBroadcast();
+      }
+    }
+    
+    // 頁面加載時檢查 URL 參數
+    window.addEventListener('load', checkUrlParams);
+    
     // ICE 伺服器配置
     const iceServers = {
       iceServers: [

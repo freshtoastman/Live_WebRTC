@@ -52,6 +52,17 @@
     <p id="roomIdDisplay"></p>
   </div>
   
+  <!-- 添加 QR 碼區域 -->
+  <div class="qr-code-container" style="margin-top: 20px; display: none;" id="qrCodeContainer">
+    <h3>聽眾掃描 QR 碼加入</h3>
+    <div id="qrCode" style="margin: 15px auto; width: 200px; height: 200px;"></div>
+    <p><small>掃描上方 QR 碼即可快速加入直播</small></p>
+    <div style="text-align: center;">
+      <button id="copyLinkBtn" style="padding: 8px 15px; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer;">複製邀請連結</button>
+      <p id="copyStatus" style="font-size: 14px; margin-top: 5px; color: #3498db; display: none;">連結已複製到剪貼簿!</p>
+    </div>
+  </div>
+  
   <!-- 添加本地預覽 -->
   <div class="preview">
     <h3>本地預覽</h3>
@@ -60,6 +71,8 @@
   
   <!-- 使用 CDN 載入 Socket.IO 客戶端 -->
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <!-- 添加 QR 碼生成庫 -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <script>
     const serverUrlInput = document.getElementById('serverUrl');
     const audioSourceSelect = document.getElementById('audioSourceSelect');
@@ -71,7 +84,10 @@
     const localAudio = document.getElementById('localAudio');
     const customRoomId = document.getElementById('customRoomId');
     const refreshRoomId = document.getElementById('refreshRoomId');
+    const copyLinkBtn = document.getElementById('copyLinkBtn');
+    const copyStatus = document.getElementById('copyStatus');
     
+    let inviteLink = '';
     let socket;
     let localStream;
     let peerConnections = {};
@@ -93,6 +109,37 @@
     function updateRoomIdDisplay() {
       roomIdDisplay.textContent = `房間 ID: ${roomId}`;
       customRoomId.value = '';
+      updateQRCode();
+    }
+    
+    // 生成 QR 碼
+    function updateQRCode() {
+      const qrCodeContainer = document.getElementById('qrCodeContainer');
+      const qrCodeDiv = document.getElementById('qrCode');
+      qrCodeDiv.innerHTML = '';
+      
+      // 從當前頁面 URL 構造聽眾連接 URL
+      const currentUrl = window.location.href;
+      const baseUrl = currentUrl.substring(0, currentUrl.lastIndexOf('/') + 1);
+      const listenerUrl = baseUrl + 'listener.html';
+      
+      // 獲取當前伺服器 URL
+      const serverUrl = serverUrlInput.value;
+      
+      // 構造包含參數的完整 URL
+      const fullListenerUrl = `${listenerUrl}?room=${roomId}&server=${encodeURIComponent(serverUrl)}`;
+      
+      // 保存邀請連結
+      inviteLink = fullListenerUrl;
+      
+      // 使用 qrcode-generator 生成 QR 碼
+      const qr = qrcode(0, 'M');
+      qr.addData(fullListenerUrl);
+      qr.make();
+      
+      // 將 QR 碼插入頁面
+      qrCodeDiv.innerHTML = qr.createImgTag(5);
+      qrCodeContainer.style.display = 'block';
     }
     
     // 初始顯示房間 ID
@@ -103,6 +150,7 @@
       if (this.value.trim()) {
         roomId = this.value.trim();
         roomIdDisplay.textContent = `房間 ID: ${roomId} (自訂)`;
+        updateQRCode();
       } else {
         roomId = generateRoomId();
         updateRoomIdDisplay();
@@ -208,6 +256,9 @@
               pc.addIceCandidate(new RTCIceCandidate(data.candidate));
             }
           });
+          
+          // 更新 QR 碼
+          updateQRCode();
         });
         
         socket.on('connect_error', (error) => {
@@ -244,6 +295,9 @@
       statusText.textContent = '廣播已停止';
       listenerCount = 0;
       listenerCountEl.textContent = `聽眾數量: ${listenerCount}`;
+      
+      // 隱藏 QR 碼
+      document.getElementById('qrCodeContainer').style.display = 'none';
     }
     
     async function handleNewListener(listenerId) {
@@ -276,6 +330,51 @@
       
       listenerCount++;
       listenerCountEl.textContent = `聽眾數量: ${listenerCount}`;
+    }
+    
+    // 複製邀請連結
+    copyLinkBtn.addEventListener('click', function() {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(inviteLink).then(function() {
+          copyStatus.style.display = 'block';
+          setTimeout(function() {
+            copyStatus.style.display = 'none';
+          }, 2000);
+        }, function(err) {
+          console.error('無法複製連結: ', err);
+          fallbackCopyTextToClipboard(inviteLink);
+        });
+      } else {
+        fallbackCopyTextToClipboard(inviteLink);
+      }
+    });
+    
+    // 備用複製方法
+    function fallbackCopyTextToClipboard(text) {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      
+      // 設置樣式使其不可見
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      try {
+        const successful = document.execCommand('copy');
+        const msg = successful ? '成功' : '失敗';
+        copyStatus.style.display = 'block';
+        setTimeout(function() {
+          copyStatus.style.display = 'none';
+        }, 2000);
+      } catch (err) {
+        console.error('複製失敗:', err);
+        alert('無法複製連結，請手動複製：' + text);
+      }
+      
+      document.body.removeChild(textArea);
     }
   </script>
 </body>
